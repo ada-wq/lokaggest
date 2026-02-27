@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LokaGest – Gestion Locative</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
   :root {
     --bg: #0a0e1a;
@@ -638,6 +639,7 @@
           </div>
 
           <button class="btn btn-primary" onclick="saveParams()" style="width:fit-content">💾 Sauvegarder les paramètres</button>
+          <button class="btn btn-secondary" onclick="testEmail()" style="width:fit-content">📧 Envoyer un email de test</button>
         </div>
       </div>
     </div><!-- /content -->
@@ -1072,6 +1074,46 @@ function buildNotifications(late, warning) {
       <div class="notif-item-body">${isLate ? `Paiement en retard de ${Math.abs(days)} jour(s).` : `Arrive à échéance le ${formatDate(fin)} (dans ${days} jour(s)).`} Pensez à demander le paiement à ${l.locataire}.</div>
     </div>`;
   }).join('');
+
+  // Envoi emails si activé
+  sendEmailAlerts(all);
+}
+
+// Clé pour éviter d'envoyer plusieurs fois le même email par session
+const emailsSentThisSession = new Set();
+
+function sendEmailAlerts(items) {
+  if(!params.emailToggle) return;
+  const service = params.ejsService || 'service_lhx37r8';
+  const template = params.ejsTemplate || 'template_3qv8v2v';
+  const pubkey = params.ejsPubkey || 'CjAfhcyhs3-2LG-j0';
+  const toEmail = params.emailNotif;
+  if(!toEmail) return;
+
+  try { emailjs.init(pubkey); } catch(e) { console.warn('EmailJS init:', e); return; }
+
+  items.forEach(({id, l, code, days}) => {
+    const sessionKey = `${id}-${code}-${new Date().toDateString()}`;
+    if(emailsSentThisSession.has(sessionKey)) return;
+    emailsSentThisSession.add(sessionKey);
+
+    const fin = getDateFin(l);
+    const templateParams = {
+      to_email: toEmail,
+      logement: l.nom,
+      locataire: l.locataire,
+      loyer: formatFCFA(l.loyer),
+      date_echeance: formatDate(fin),
+      statut: code === 'late' ? `En retard de ${Math.abs(days)} jour(s)` : `Échéance dans ${days} jour(s)`,
+      message: code === 'late'
+        ? `⛔ Le logement "${l.nom}" a un paiement en retard de ${Math.abs(days)} jour(s). Loyer : ${formatFCFA(l.loyer)}.`
+        : `⚠️ Le logement "${l.nom}" arrive à échéance le ${formatDate(fin)} (dans ${days} jour(s)). Pensez à contacter ${l.locataire}.`
+    };
+
+    emailjs.send(service, template, templateParams)
+      .then(() => console.log(`Email envoyé pour ${l.nom}`))
+      .catch(err => console.warn(`Erreur email pour ${l.nom}:`, err));
+  });
 }
 
 function updateBadges() {
@@ -1202,14 +1244,15 @@ window.deleteUser = async (id) => {
 // ── PARAMS ────────────────────────────────────────
 async function loadParams() {
   const snap = await get(ref(db,'params'));
-  params = snap.val()||{ joursAvant:7, emailToggle:true, appToggle:true, timezone:'Africa/Abidjan' };
+  params = snap.val()||{ joursAvant:7, emailToggle:true, appToggle:true, timezone:'Africa/Abidjan',
+    ejsService:'service_lhx37r8', ejsTemplate:'template_3qv8v2v', ejsPubkey:'CjAfhcyhs3-2LG-j0' };
   document.getElementById('param-jours').value = params.joursAvant||7;
   document.getElementById('param-email').value = params.emailNotif||'';
   document.getElementById('param-email-toggle').checked = params.emailToggle!==false;
   document.getElementById('param-app-toggle').checked = params.appToggle!==false;
-  document.getElementById('param-ejs-service').value = params.ejsService||'';
-  document.getElementById('param-ejs-template').value = params.ejsTemplate||'';
-  document.getElementById('param-ejs-pubkey').value = params.ejsPubkey||'';
+  document.getElementById('param-ejs-service').value = params.ejsService||'service_lhx37r8';
+  document.getElementById('param-ejs-template').value = params.ejsTemplate||'template_3qv8v2v';
+  document.getElementById('param-ejs-pubkey').value = params.ejsPubkey||'CjAfhcyhs3-2LG-j0';
   const tz = document.getElementById('param-timezone');
   if(params.timezone) tz.value = params.timezone;
 }
@@ -1320,7 +1363,31 @@ document.addEventListener('click', (e) => {
 });
 
 // ── TOAST ─────────────────────────────────────────
-window.toast = (msg, type='info') => {
+window.testEmail = async () => {
+  const service = document.getElementById('param-ejs-service').value || 'service_lhx37r8';
+  const template = document.getElementById('param-ejs-template').value || 'template_3qv8v2v';
+  const pubkey = document.getElementById('param-ejs-pubkey').value || 'CjAfhcyhs3-2LG-j0';
+  const toEmail = document.getElementById('param-email').value;
+  if(!toEmail) return toast('Entrez d\'abord un email de réception dans les paramètres','error');
+  try {
+    emailjs.init(pubkey);
+    await emailjs.send(service, template, {
+      to_email: toEmail,
+      logement: 'Studio Test',
+      locataire: 'Jean Dupont',
+      loyer: '50 000 FCFA',
+      date_echeance: new Date().toLocaleDateString('fr-FR'),
+      statut: 'Test de notification',
+      message: '✅ Ceci est un email de test envoyé depuis LokaGest. La configuration EmailJS fonctionne correctement !'
+    });
+    toast('Email de test envoyé avec succès ! Vérifiez votre boîte mail 📧','success');
+  } catch(e) {
+    console.error(e);
+    toast('Erreur envoi email : ' + (e.text || e.message || JSON.stringify(e)),'error');
+  }
+};
+
+
   const icons = {success:'✅',error:'❌',info:'ℹ️'};
   const el = document.createElement('div');
   el.className = `toast ${type}`;
